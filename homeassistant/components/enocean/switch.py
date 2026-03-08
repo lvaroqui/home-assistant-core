@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from enocean_async import EEP, EEP_SPECIFICATIONS, EEPHandler, EEPMessage, ERP1Telegram
+from enocean_async import (
+    EEP,
+    EEP_SPECIFICATIONS,
+    EURID,
+    Address,
+    BaseAddress,
+    EEPHandler,
+    EEPMessage,
+    ERP1Telegram,
+)
 from enocean_async.esp3.packet import ESP3PacketType
 import voluptuous as vol
 
@@ -18,7 +27,7 @@ from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from .const import DOMAIN, LOGGER
+from .const import CONF_SENDER_ID, DOMAIN, LOGGER
 from .entity import EnOceanEntity, combine_hex
 
 CONF_CHANNEL = "channel"
@@ -27,6 +36,7 @@ DEFAULT_NAME = "EnOcean Switch"
 PLATFORM_SCHEMA = SWITCH_PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
+        vol.Optional(CONF_SENDER_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
         vol.Optional(CONF_CHANNEL, default=0): cv.positive_int,
     }
@@ -71,11 +81,13 @@ async def async_setup_platform(
 ) -> None:
     """Set up the EnOcean switch platform."""
     channel: int = config[CONF_CHANNEL]
+    sender_id: list[int] = config[CONF_SENDER_ID]
     dev_id: list[int] = config[CONF_ID]
     dev_name: str = config[CONF_NAME]
 
     _migrate_to_new_unique_id(hass, dev_id, channel)
-    async_add_entities([EnOceanSwitch(dev_id, dev_name, channel)])
+
+    async_add_entities([EnOceanSwitch(dev_id, dev_name, channel, sender_id)])
 
 
 class EnOceanSwitch(EnOceanEntity, SwitchEntity):
@@ -83,41 +95,69 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
 
     _attr_is_on = False
 
-    def __init__(self, dev_id: list[int], dev_name: str, channel: int) -> None:
+    def __init__(
+        self, dev_id: list[int], dev_name: str, channel: int, sender_id: list[int]
+    ) -> None:
         """Initialize the EnOcean switch device."""
         super().__init__(dev_id)
         self._light = None
         self.channel: int = channel
+
+        try:
+            if len(sender_id) == 0:
+                # Default sender ID if not provided (will use) the dongle's ID
+                sender_id = [0x00, 0x00, 0x00, 0x00]
+            sender_id_addr: Address = Address.from_bytelist(sender_id)
+            if sender_id_addr.is_eurid():
+                self.sender_id = EURID.from_number(sender_id_addr.to_number())
+            elif sender_id_addr.is_base_address():
+                self.sender_id = BaseAddress.from_number(sender_id_addr.to_number())
+        except ValueError:
+            LOGGER.warning("Invalid sender_id provided, sender_id will be None")
+            self.sender_id = None
+
         self._attr_unique_id = generate_unique_id(dev_id, channel)
         self._attr_name = dev_name
+
+    def _send_telegram(self, on: bool):
+        """Send a telegram to turn the switch on or off."""
+        if not self.address or not self.sender_id:
+            LOGGER.warning("Cannot send telegram, address or sender_id is None")
+            return
+
+        optional = [0x03]
+        optional.extend(self.address.to_bytelist())
+        optional.extend([0xFF, 0x00])
+
+        data = [
+            0xD2,
+            0x01,
+            self.channel & 0xFF,
+            0x01 if on else 0x00,
+        ]
+        data.extend(self.sender_id.to_bytelist())
+        data.append(0x00)
+
+        self.send_command(
+            data=data,
+            optional=optional,
+            packet_type=ESP3PacketType(0x01),
+        )
 
     def turn_on(self, **kwargs: Any) -> None:
         """Turn on the switch."""
         if not self.address:
             return
 
-        optional = [0x03]
-        optional.extend(self.address.to_bytelist())
-        optional.extend([0xFF, 0x00])
-        self.send_command(
-            data=[0xD2, 0x01, self.channel & 0xFF, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00],
-            optional=optional,
-            packet_type=ESP3PacketType(0x01),
-        )
+        self._send_telegram(on=True)
         self._attr_is_on = True
 
     def turn_off(self, **kwargs: Any) -> None:
         """Turn off the switch."""
         if not self.address:
             return
-        optional = [0x03]
-        optional.extend(self.address.to_bytelist())
-        optional.extend([0xFF, 0x00])
-        self.send_command(
-            data=[0xD2, 0x01, self.channel & 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-            optional=optional,
-            packet_type=ESP3PacketType(0x01),
-        )
+
+        self._send_telegram(on=False)
         self._attr_is_on = False
 
     def value_changed(self, telegram: ERP1Telegram) -> None:

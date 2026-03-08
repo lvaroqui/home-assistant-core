@@ -34,6 +34,7 @@ class EnOceanEntity(Entity):
             elif address.is_base_address():
                 self.address = BaseAddress.from_number(address.to_number())
         except ValueError:
+            LOGGER.warning("Invalid dev_id provided, address will be None")
             self.address = None
 
     async def async_added_to_hass(self) -> None:
