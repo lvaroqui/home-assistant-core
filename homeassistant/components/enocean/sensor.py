@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from enocean_async import EEP, EEP_SPECIFICATIONS, EEPHandler, EEPMessage, ERP1Telegram
+from enocean_async import EEP
 import voluptuous as vol
 
 from homeassistant.components.sensor import (
@@ -166,9 +166,6 @@ class EnOceanSensor(EnOceanEntity, RestoreSensor):
         if (sensor_data := await self.async_get_last_sensor_data()) is not None:
             self._attr_native_value = sensor_data.native_value
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
-        """Update the internal state of the sensor."""
-
 
 class EnOceanPowerSensor(EnOceanSensor):
     """Representation of an EnOcean power sensor.
@@ -177,7 +174,7 @@ class EnOceanPowerSensor(EnOceanSensor):
     - A5-12-01 (Automated Meter Reading, Electricity)
     """
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
+    def erp1_telegram_received(self, telegram: ERP1Telegram) -> None:
         """Update the internal state of the sensor."""
         if telegram.rorg != 0xA5:
             return
@@ -230,7 +227,7 @@ class EnOceanTemperatureSensor(EnOceanSensor):
         self.range_from = range_from
         self.range_to = range_to
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
+    def erp1_telegram_received(self, telegram: ERP1Telegram) -> None:
         """Update the internal state of the sensor."""
         if telegram.rorg != 0xA5:
             return
@@ -252,7 +249,7 @@ class EnOceanHumiditySensor(EnOceanSensor):
     - A5-10-10 to A5-10-14 (Room Operating Panels)
     """
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
+    def erp1_telegram_received(self, telegram: ERP1Telegram) -> None:
         """Update the internal state of the sensor."""
         if telegram.rorg != 0xA5:
             return
@@ -268,7 +265,7 @@ class EnOceanWindowHandle(EnOceanSensor):
     - F6-10-00 (Mechanical handle / Hoppe AG)
     """
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
+    def erp1_telegram_received(self, telegram: ERP1Telegram) -> None:
         """Update the internal state of the sensor."""
         action = (telegram.telegram_data[0] & 0x70) >> 4
 

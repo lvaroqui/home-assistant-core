@@ -11,8 +11,20 @@ from homeassistant.components.usb import (
     human_readable_device_name,
     usb_unique_id_from_service_info,
 )
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.const import ATTR_MANUFACTURER, CONF_DEVICE, CONF_NAME
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
+from homeassistant.const import (
+    ATTR_MANUFACTURER,
+    CONF_DEVICE,
+    CONF_ID,
+    CONF_NAME,
+    Platform,
+)
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.selector import (
     SelectSelector,
@@ -21,7 +33,14 @@ from homeassistant.helpers.selector import (
 )
 from homeassistant.helpers.service_info.usb import UsbServiceInfo
 
-from .const import DOMAIN, ERROR_INVALID_DONGLE_PATH, LOGGER, MANUFACTURER
+from .const import (
+    CONF_CHANNEL,
+    CONF_SENDER_ID,
+    DOMAIN,
+    ERROR_INVALID_DONGLE_PATH,
+    LOGGER,
+    MANUFACTURER,
+)
 
 MANUAL_SCHEMA = vol.Schema(
     {
@@ -40,6 +59,7 @@ def _detect_usb_dongle() -> list[str]:
         "/dev/tty*FTOA2PV*",
         "/dev/serial/by-id/*EnOcean*",
         "/dev/tty.usbserial-*",
+        "/dev/serial/by-id/*",
     ]
     found_paths = []
     for current_glob in globs_to_test:
@@ -102,14 +122,14 @@ class EnOceanFlowHandler(ConfigFlow, domain=DOMAIN):
     async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
         """Import a yaml configuration."""
 
-        if not await self.validate_enocean_conf(import_data):
+        if not await self._validate_enocean_conf(import_data):
             LOGGER.warning(
                 "Cannot import yaml configuration: %s is not a valid dongle path",
                 import_data[CONF_DEVICE],
             )
             return self.async_abort(reason="invalid_dongle_path")
 
-        return self.create_enocean_entry(import_data)
+        return self._create_enocean_entry(import_data)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -152,8 +172,8 @@ class EnOceanFlowHandler(ConfigFlow, domain=DOMAIN):
         """Request manual USB dongle path."""
         errors = {}
         if user_input is not None:
-            if await self.validate_enocean_conf(user_input):
-                return self.create_enocean_entry(user_input)
+            if await self._validate_enocean_conf(user_input):
+                return self._create_enocean_entry(user_input)
             errors = {CONF_DEVICE: ERROR_INVALID_DONGLE_PATH}
 
         return self.async_show_form(
@@ -162,7 +182,7 @@ class EnOceanFlowHandler(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def validate_enocean_conf(self, user_input) -> bool:
+    async def _validate_enocean_conf(self, user_input) -> bool:
         """Return True if the user_input contains a valid dongle path."""
         dongle_path = user_input[CONF_DEVICE]
         try:
@@ -177,6 +197,112 @@ class EnOceanFlowHandler(ConfigFlow, domain=DOMAIN):
 
         return True
 
-    def create_enocean_entry(self, user_input):
+    def _create_enocean_entry(self, user_input):
         """Create an entry for the provided configuration."""
         return self.async_create_entry(title=MANUFACTURER, data=user_input)
+
+    @classmethod
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Return subentries supported by this integration."""
+        return {"cover": CoverSubentryFlowHandler, "switch": SwitchSubentryFlowHandler}
+
+
+def _parse_device_address(device_address: str) -> list[int]:
+    """Parse a device address from a string to a list of integers."""
+    try:
+        # Remove any common separators and whitespace, then parse as 4 hex bytes
+        device_address = device_address.replace(" ", "")
+        device_address = device_address.replace("-", "")
+        device_address = device_address.replace(":", "")
+
+        if len(device_address) == 8 and all(
+            c in "0123456789abcdefABCDEF" for c in device_address
+        ):
+            return [
+                int(device_address[i : i + 2], 16)
+                for i in range(0, len(device_address), 2)
+            ]
+
+    except ValueError as err:
+        raise ValueError(f"Invalid device address format: {device_address}") from err
+
+    raise ValueError(f"Invalid device address format: {device_address}")
+
+
+class CoverSubentryFlowHandler(ConfigSubentryFlow):
+    """Handle subentry flow for adding and modifying a cover."""
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """User flow to add a new cover."""
+
+        errors = {}
+        if user_input is not None:
+            for field in (CONF_ID, CONF_SENDER_ID):
+                try:
+                    user_input[field] = _parse_device_address(user_input[field])
+                except ValueError:
+                    errors[field] = "invalid_device_address"
+
+            user_input["type"] = Platform.COVER
+
+            if len(errors) == 0:
+                return self.async_create_entry(
+                    title=user_input[CONF_NAME],
+                    data=user_input,
+                    unique_id=str(user_input[CONF_ID]),
+                )
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ID): str,
+                    vol.Required(CONF_NAME): str,
+                    vol.Optional(CONF_SENDER_ID): str,
+                }
+            ),
+            errors=errors,
+        )
+
+
+class SwitchSubentryFlowHandler(ConfigSubentryFlow):
+    """Handle subentry flow for adding and modifying a location."""
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """User flow to add a new switch."""
+
+        errors = {}
+        if user_input is not None:
+            for field in [CONF_ID, CONF_SENDER_ID]:
+                try:
+                    user_input[field] = _parse_device_address(user_input[field])
+                except ValueError:
+                    errors[field] = "invalid_device_address"
+
+            user_input["type"] = Platform.SWITCH
+
+            if len(errors) == 0:
+                return self.async_create_entry(
+                    title=user_input[CONF_NAME],
+                    data=user_input,
+                    unique_id=str(user_input[CONF_ID]),
+                )
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_NAME): str,
+                    vol.Required(CONF_ID): str,
+                    vol.Optional(CONF_SENDER_ID): str,
+                    vol.Optional(CONF_CHANNEL, default=0): cv.positive_int,
+                }
+            ),
+            errors=errors,
+        )

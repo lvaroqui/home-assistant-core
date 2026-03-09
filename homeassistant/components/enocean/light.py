@@ -5,8 +5,6 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from enocean_async import ERP1Telegram
-from enocean_async.esp3.packet import ESP3PacketType
 import voluptuous as vol
 
 from homeassistant.components.light import (
@@ -76,7 +74,7 @@ class EnOceanLight(EnOceanEntity, LightEntity):
         command.extend(self._sender_id)
         command.extend([0x00])
         packet_type = ESP3PacketType(0x01)
-        self.send_command(command, [], packet_type)
+        self.send_esp3_packet(command, [], packet_type)
         self._attr_is_on = True
 
     def turn_off(self, **kwargs: Any) -> None:
@@ -85,10 +83,10 @@ class EnOceanLight(EnOceanEntity, LightEntity):
         command.extend(self._sender_id)
         command.extend([0x00])
         packet_type = ESP3PacketType(0x01)
-        self.send_command(command, [], packet_type)
+        self.send_esp3_packet(command, [], packet_type)
         self._attr_is_on = False
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
+    def erp1_telegram_received(self, telegram: ERP1Telegram) -> None:
         """Update the internal state of this device.
 
         Dimmer devices like Eltako FUD61 send telegram in different RORGs.

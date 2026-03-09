@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from enocean_async import EURID, Address, BaseAddress, ERP1Telegram
-from enocean_async.esp3.packet import ESP3PacketType
+from enocean_async import (
+    EEP,
+    Observable,
+    Observation,
+    ObservationSource,
+    QueryCoverPosition,
+    SetCoverPosition,
+    StopCover,
+)
 import voluptuous as vol
 
 from homeassistant.components.cover import (
@@ -13,13 +20,13 @@ from homeassistant.components.cover import (
     CoverEntity,
     CoverEntityFeature,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ID, CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CONF_SENDER_ID, LOGGER
+from .const import CONF_SENDER_ID
 from .entity import EnOceanEntity, combine_hex
 
 DEFAULT_NAME = "EnOcean Cover"
@@ -38,48 +45,42 @@ def generate_unique_id(dev_id: list[int]) -> str:
     return f"{combine_hex(dev_id)}"
 
 
-async def async_setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
-    async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+    config_entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up the EnOcean switch platform."""
-    sender_id: list[int] = config[CONF_SENDER_ID]
-    dev_id: list[int] = config[CONF_ID]
-    dev_name: str = config[CONF_NAME]
+    entities = []
+    for subentry in config_entry.subentries.values():
+        if subentry.data["type"] == "cover":
+            device_id: list[int] = subentry.data[CONF_ID]
+            dev_name: str = subentry.data[CONF_NAME]
+            sender_id: list[int] = subentry.data[CONF_SENDER_ID]
+            entities.append(EnOceanCover(device_id, dev_name, sender_id))
 
-    async_add_entities([EnOceanCover(dev_id, dev_name, sender_id)])
+    async_add_entities(entities)
 
 
 class EnOceanCover(EnOceanEntity, CoverEntity):
-    """Representation of an EnOcean switch device."""
+    """Representation of an EnOcean Cover device."""
 
     @property
     def is_closed(self) -> bool | None:
         """Return if the cover is closed."""
         return self._attr_current_cover_position == 0
 
-    def __init__(self, dev_id: list[int], dev_name: str, sender_id: list[int]) -> None:
+    def __init__(
+        self, device_id: list[int], dev_name: str, sender_id: list[int]
+    ) -> None:
         """Initialize the EnOcean switch device."""
-        super().__init__(dev_id)
+        super().__init__(device_id, EEP(0xD2, 0x05, 0x00), sender_id)
 
-        try:
-            if len(sender_id) == 0:
-                # Default sender ID if not provided (will use) the dongle's ID
-                sender_id = [0x00, 0x00, 0x00, 0x00]
-            sender_id_addr = Address.from_bytelist(sender_id)
-            if sender_id_addr.is_eurid():
-                self.sender_id = EURID.from_number(sender_id_addr.to_number())
-            elif sender_id_addr.is_base_address():
-                self.sender_id = BaseAddress.from_number(sender_id_addr.to_number())
-        except ValueError:
-            LOGGER.warning("Invalid sender_id provided, sender_id will be None")
-            self.sender_id = None
-
-        self._attr_unique_id = generate_unique_id(dev_id)
+        self._attr_unique_id = generate_unique_id(device_id)
         self._attr_name = dev_name
         self._attr_is_closed = None
+        self.requested_position: int | None = None
+        self._attr_current_cover_position = None
 
         self._attr_supported_features = (
             CoverEntityFeature.OPEN
@@ -88,34 +89,32 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
             | CoverEntityFeature.STOP
         )
 
-    def _send_telegram(self, payload: list[int]):
-        """Send a telegram to set the cover position."""
-        if not self.address or not self.sender_id:
-            LOGGER.warning("Cannot send telegram, address or sender_id is None")
-            return
-
-        optional = [0x03]
-        optional.extend(self.address.to_bytelist())
-        optional.extend([0xFF, 0x00])
-
-        data = [0xD2]
-        data.extend(payload)
-        data.extend(self.sender_id.to_bytelist())
-        data.append(0x00)
-
-        self.send_command(
-            data=data,
-            optional=optional,
-            packet_type=ESP3PacketType(0x01),
-        )
+    def added_to_gateway(self) -> None:
+        """Handle being added to the gateway."""
+        self.send_command(QueryCoverPosition())
 
     def _set_position(self, percentage: int):
         """Set the cover to a specific position."""
-        self._send_telegram([percentage, 0x00, 0x00, 0x01])
 
-    def _stop(self):
-        """Stop the cover."""
-        self._send_telegram([0x02])
+        self.requested_position = percentage
+
+        # If we have a current position and a requested position, we can derive
+        # the cover state (opening/closing) to provide better feedback in the
+        # UI.
+        if (
+            self._attr_current_cover_position is not None
+            and self.requested_position is not None
+        ):
+            current_position = 100 - self._attr_current_cover_position
+            if current_position < self.requested_position:
+                self._attr_is_closing = True
+                self._attr_is_opening = False
+            elif current_position > self.requested_position:
+                self._attr_is_closing = False
+                self._attr_is_opening = True
+            self.schedule_update_ha_state()
+
+        self.send_command(SetCoverPosition(position=percentage))
 
     def open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
@@ -127,7 +126,10 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
 
     def stop_cover(self, **kwargs: Any) -> None:
         """Stop the cover."""
-        self._stop()
+        self._attr_is_closing = False
+        self._attr_is_opening = False
+        self.schedule_update_ha_state()
+        self.send_command(StopCover())
 
     def set_cover_position(self, **kwargs: Any) -> None:
         """Set the cover to a specific position."""
@@ -135,10 +137,60 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
         if position is not None:
             self._set_position(100 - position)
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
-        """Update the internal state of the switch."""
+    def observation_received(self, observation: Observation):
+        """Update the internal state of the cover based on an observation."""
+        schedule_update = False
 
-        if telegram.rorg == 0xD2:
-            percent = telegram.telegram_data[0]
+        if Observable.POSITION in observation.values:
+            percent = observation.values[Observable.POSITION]
             self._attr_current_cover_position = 100 - percent
+            schedule_update = True
+
+        if Observable.COVER_STATE in observation.values and (
+            not self.requested_position or observation.source == ObservationSource.TIMER
+        ):
+            # If we don't have a requested position, use cover state from the
+            # message
+            #
+            # Currently, when the cover starts moving, we receive a stopped
+            # state, followed by an opening/closing state, which causes the UI
+            # to briefly show "stopped" before updating to the correct state. To
+            # work around this, we prioritize the cover state from the message
+            # only if we don't have a requested position.
+            #
+            # Only exception is if the observation source is a timer (from the
+            # watchdog), in which case the cover stopped from external control
+            # (eg. physical switch, obstacle).
+            self.requested_position = None
+
+            state = observation.values[Observable.COVER_STATE]
+            if state == "closed":
+                self._attr_is_closed = True
+            else:
+                self._attr_is_closed = False
+
+            if state == "opening":
+                self._attr_is_opening = True
+                self._attr_is_closing = False
+            elif state == "closing":
+                self._attr_is_opening = False
+                self._attr_is_closing = True
+            else:
+                self._attr_is_opening = False
+                self._attr_is_closing = False
+
+            schedule_update = True
+        elif self._attr_current_cover_position is not None:
+            # Assume movement has stopped if we receive a position matching the
+            # requested position
+            current_position = 100 - self._attr_current_cover_position
+
+            if current_position == self.requested_position:
+                self.requested_position = None
+                self._attr_is_closing = False
+                self._attr_is_opening = False
+
+            schedule_update = True
+
+        if schedule_update:
             self.schedule_update_ha_state()

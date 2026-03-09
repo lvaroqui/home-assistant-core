@@ -4,17 +4,31 @@ from enocean_async import Gateway
 import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.const import CONF_DEVICE
+from homeassistant.const import CONF_DEVICE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
     async_dispatcher_send,
+    dispatcher_send,
 )
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, SIGNAL_RECEIVE_MESSAGE, SIGNAL_SEND_MESSAGE
+from .const import (
+    DOMAIN,
+    SIGNAL_ADD_DEVICE,
+    SIGNAL_ADDED_TO_GATEWAY,
+    SIGNAL_RECEIVE_EEP_MESSAGE,
+    SIGNAL_RECEIVE_ERP1_TELEGRAM,
+    SIGNAL_RECEIVE_OBSERVATION,
+    SIGNAL_REMOVE_DEVICE,
+    SIGNAL_SEND_COMMAND,
+    SIGNAL_SEND_ESP3_PACKET,
+)
+
+PLATFORMS = [Platform.COVER, Platform.SWITCH]
+
 
 type EnOceanConfigEntry = ConfigEntry[Gateway]
 
@@ -47,10 +61,19 @@ async def async_setup_entry(
     hass: HomeAssistant, config_entry: EnOceanConfigEntry
 ) -> bool:
     """Set up an EnOcean gateway for the given entry."""
+
     gateway = Gateway(port=config_entry.data[CONF_DEVICE])
 
     gateway.add_erp1_received_callback(
-        lambda packet: async_dispatcher_send(hass, SIGNAL_RECEIVE_MESSAGE, packet)
+        lambda packet: async_dispatcher_send(hass, SIGNAL_RECEIVE_ERP1_TELEGRAM, packet)
+    )
+
+    gateway.add_eep_message_received_callback(
+        lambda message: async_dispatcher_send(hass, SIGNAL_RECEIVE_EEP_MESSAGE, message)
+    )
+
+    gateway.add_observation_callback(
+        lambda message: async_dispatcher_send(hass, SIGNAL_RECEIVE_OBSERVATION, message)
     )
 
     try:
@@ -62,8 +85,28 @@ async def async_setup_entry(
     config_entry.runtime_data = gateway
 
     config_entry.async_on_unload(
-        async_dispatcher_connect(hass, SIGNAL_SEND_MESSAGE, gateway.send_esp3_packet)
+        async_dispatcher_connect(
+            hass, SIGNAL_SEND_ESP3_PACKET, gateway.send_esp3_packet
+        )
     )
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_SEND_COMMAND, gateway.send_command)
+    )
+    config_entry.async_on_unload(
+        async_dispatcher_connect(
+            hass,
+            SIGNAL_ADD_DEVICE,
+            lambda address, eep, sender_id: (
+                gateway.add_device(address, eep, sender_id),
+                dispatcher_send(hass, SIGNAL_ADDED_TO_GATEWAY, address),
+            ),
+        )
+    )
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_REMOVE_DEVICE, gateway.remove_device)
+    )
+
+    await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
     return True
 
 

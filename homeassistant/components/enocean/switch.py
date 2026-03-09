@@ -6,41 +6,22 @@ from typing import Any
 
 from enocean_async import (
     EEP,
-    EEP_SPECIFICATIONS,
-    EURID,
-    Address,
-    BaseAddress,
-    EEPHandler,
-    EEPMessage,
-    ERP1Telegram,
+    Observable,
+    Observation,
+    QueryActuatorStatus,
+    SetSwitchOutput,
 )
-from enocean_async.esp3.packet import ESP3PacketType
-import voluptuous as vol
 
-from homeassistant.components.switch import (
-    PLATFORM_SCHEMA as SWITCH_PLATFORM_SCHEMA,
-    SwitchEntity,
-)
+from homeassistant.components.switch import SwitchEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ID, CONF_NAME, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv, entity_registry as er
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CONF_SENDER_ID, DOMAIN, LOGGER
+from .const import CONF_CHANNEL, CONF_SENDER_ID
 from .entity import EnOceanEntity, combine_hex
 
-CONF_CHANNEL = "channel"
 DEFAULT_NAME = "EnOcean Switch"
-
-PLATFORM_SCHEMA = SWITCH_PLATFORM_SCHEMA.extend(
-    {
-        vol.Required(CONF_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
-        vol.Optional(CONF_SENDER_ID): vol.All(cv.ensure_list, [vol.Coerce(int)]),
-        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-        vol.Optional(CONF_CHANNEL, default=0): cv.positive_int,
-    }
-)
 
 
 def generate_unique_id(dev_id: list[int], channel: int) -> str:
@@ -48,46 +29,23 @@ def generate_unique_id(dev_id: list[int], channel: int) -> str:
     return f"{combine_hex(dev_id)}-{channel}"
 
 
-def _migrate_to_new_unique_id(hass: HomeAssistant, dev_id, channel) -> None:
-    """Migrate old unique ids to new unique ids."""
-    old_unique_id = f"{combine_hex(dev_id)}"
-
-    ent_reg = er.async_get(hass)
-    entity_id = ent_reg.async_get_entity_id(Platform.SWITCH, DOMAIN, old_unique_id)
-
-    if entity_id is not None:
-        new_unique_id = generate_unique_id(dev_id, channel)
-        try:
-            ent_reg.async_update_entity(entity_id, new_unique_id=new_unique_id)
-        except ValueError:
-            LOGGER.warning(
-                "Skip migration of id [%s] to [%s] because it already exists",
-                old_unique_id,
-                new_unique_id,
-            )
-        else:
-            LOGGER.debug(
-                "Migrating unique_id from [%s] to [%s]",
-                old_unique_id,
-                new_unique_id,
-            )
-
-
-async def async_setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
-    async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+    config_entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the EnOcean switch platform."""
-    channel: int = config[CONF_CHANNEL]
-    sender_id: list[int] = config[CONF_SENDER_ID]
-    dev_id: list[int] = config[CONF_ID]
-    dev_name: str = config[CONF_NAME]
+    """Set up the EnOcean switch entities."""
 
-    _migrate_to_new_unique_id(hass, dev_id, channel)
+    entities = []
+    for subentry in config_entry.subentries.values():
+        if subentry.data["type"] == Platform.SWITCH:
+            device_id: list[int] = subentry.data[CONF_ID]
+            dev_name: str = subentry.data[CONF_NAME]
+            sender_id: list[int] = subentry.data[CONF_SENDER_ID]
+            channel = subentry.data[CONF_CHANNEL]
+            entities.append(EnOceanSwitch(device_id, dev_name, channel, sender_id))
 
-    async_add_entities([EnOceanSwitch(dev_id, dev_name, channel, sender_id)])
+    async_add_entities(entities)
 
 
 class EnOceanSwitch(EnOceanEntity, SwitchEntity):
@@ -99,96 +57,53 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
         self, dev_id: list[int], dev_name: str, channel: int, sender_id: list[int]
     ) -> None:
         """Initialize the EnOcean switch device."""
-        super().__init__(dev_id)
-        self._light = None
+        super().__init__(dev_id, EEP(0xD2, 0x01, 0x01), sender_id)
         self.channel: int = channel
-
-        try:
-            if len(sender_id) == 0:
-                # Default sender ID if not provided (will use) the dongle's ID
-                sender_id = [0x00, 0x00, 0x00, 0x00]
-            sender_id_addr: Address = Address.from_bytelist(sender_id)
-            if sender_id_addr.is_eurid():
-                self.sender_id = EURID.from_number(sender_id_addr.to_number())
-            elif sender_id_addr.is_base_address():
-                self.sender_id = BaseAddress.from_number(sender_id_addr.to_number())
-        except ValueError:
-            LOGGER.warning("Invalid sender_id provided, sender_id will be None")
-            self.sender_id = None
 
         self._attr_unique_id = generate_unique_id(dev_id, channel)
         self._attr_name = dev_name
 
-    def _send_telegram(self, on: bool):
+    def added_to_gateway(self):
+        """Handle being added to the gateway."""
+        self.send_command(QueryActuatorStatus(entity_id=str(self.channel)))
+
+    def _set_state(self, on: bool):
         """Send a telegram to turn the switch on or off."""
-        if not self.address or not self.sender_id:
-            LOGGER.warning("Cannot send telegram, address or sender_id is None")
-            return
-
-        optional = [0x03]
-        optional.extend(self.address.to_bytelist())
-        optional.extend([0xFF, 0x00])
-
-        data = [
-            0xD2,
-            0x01,
-            self.channel & 0xFF,
-            0x01 if on else 0x00,
-        ]
-        data.extend(self.sender_id.to_bytelist())
-        data.append(0x00)
-
         self.send_command(
-            data=data,
-            optional=optional,
-            packet_type=ESP3PacketType(0x01),
+            SetSwitchOutput(output_value=100 if on else 0, entity_id=str(self.channel))
         )
+        self._attr_is_on = on
 
     def turn_on(self, **kwargs: Any) -> None:
         """Turn on the switch."""
-        if not self.address:
-            return
-
-        self._send_telegram(on=True)
-        self._attr_is_on = True
+        self._set_state(on=True)
 
     def turn_off(self, **kwargs: Any) -> None:
         """Turn off the switch."""
-        if not self.address:
-            return
+        self._set_state(on=False)
 
-        self._send_telegram(on=False)
-        self._attr_is_on = False
+    def observation_received(self, observation: Observation):
+        """Update the internal state of the switch based on an observation."""
+        if Observable.SWITCH_STATE in observation.values:
+            if observation.entity == str(self.channel):
+                self._attr_is_on = observation.values[Observable.SWITCH_STATE]
+                self.schedule_update_ha_state()
 
-    def value_changed(self, telegram: ERP1Telegram) -> None:
-        """Update the internal state of the switch."""
-        if telegram.rorg == 0xA5:
-            # power meter telegram, turn on if > 1 watts
-            if (eep := EEP_SPECIFICATIONS.get(EEP(0xA5, 0x12, 0x01))) is None:
-                LOGGER.warning("EEP A5-12-01 cannot be decoded")
-                return
+    # def erp1_telegram_received(self, telegram: ERP1Telegram) -> None:
+    #     """Update the internal state of the switch."""
+    #     if telegram.rorg == 0xA5:
+    #         # power meter telegram, turn on if > 1 watts
+    #         if (eep := EEP_SPECIFICATIONS.get(EEP(0xA5, 0x12, 0x01))) is None:
+    #             LOGGER.warning("EEP A5-12-01 cannot be decoded")
+    #             return
 
-            msg: EEPMessage = EEPHandler(eep).decode(telegram)
+    #         msg: EEPMessage = EEPHandler(eep).decode(telegram)
 
-            if "DT" in msg.values and msg.values["DT"].raw == 1:
-                # this packet reports the current value
-                raw_val = msg.values["MR"].raw
-                divisor = msg.values["DIV"].raw
-                watts = raw_val / (10**divisor)
-                if watts > 1:
-                    self._attr_is_on = True
-                    self.schedule_update_ha_state()
-
-        elif telegram.rorg == 0xD2:
-            # actuator status telegram
-            if (eep := EEP_SPECIFICATIONS.get(EEP(0xD2, 0x01, 0x01))) is None:
-                LOGGER.warning("EEP D2-01-01 cannot be decoded")
-                return
-
-            msg = EEPHandler(eep).decode(telegram)
-            if msg.values["CMD"].raw == 4:
-                channel = msg.values["I/O"].raw
-                output = msg.values["OV"].raw
-                if channel == self.channel:
-                    self._attr_is_on = output > 0
-                    self.schedule_update_ha_state()
+    #         if "DT" in msg.values and msg.values["DT"].raw == 1:
+    #             # this packet reports the current value
+    #             raw_val = msg.values["MR"].raw
+    #             divisor = msg.values["DIV"].raw
+    #             watts = raw_val / (10**divisor)
+    #             if watts > 1:
+    #                 self._attr_is_on = True
+    #                 self.schedule_update_ha_state()

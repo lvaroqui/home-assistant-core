@@ -31,10 +31,46 @@
       }
     }
   },
+  "config_subentries": {
+    "cover": {
+      "abort": {
+        "already_exists": "A cover with this ID already exists."
+      },
+      "error": {
+        "invalid_device_address": "Invalid device address format. Please enter a valid hexadecimal address (e.g., '12:34:AB:CD')."
+      },
+      "initiate_flow": {
+        "user": "[%key:component::enocean::config_subentries::cover::step::user::title%]"
+      },
+      "step": {
+        "user": {
+          "description": "Add a new cover device.",
+          "title": "Add Cover"
+        }
+      }
+    },
+    "switch": {
+      "abort": {
+        "already_exists": "A switch with this ID already exists."
+      },
+      "error": {
+        "invalid_device_address": "Invalid device address format. Please enter a valid hexadecimal address (e.g., '12:34:AB:CD')."
+      },
+      "initiate_flow": {
+        "user": "[%key:component::enocean::config_subentries::switch::step::user::title%]"
+      },
+      "step": {
+        "user": {
+          "description": "Add a new switch device.",
+          "title": "Add Switch"
+        }
+      }
+    }
+  },
   "selector": {
     "devices": {
       "options": {
-        "manual": "Custom path"
+        "manual": "Custom Path"
       }
     }
   }

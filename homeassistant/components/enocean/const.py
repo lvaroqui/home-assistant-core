@@ -10,9 +10,16 @@ MANUFACTURER = "EnOcean"
 
 ERROR_INVALID_DONGLE_PATH = "invalid_dongle_path"
 
-SIGNAL_RECEIVE_MESSAGE = "enocean.receive_message"
-SIGNAL_SEND_MESSAGE = "enocean.send_message"
+SIGNAL_ADD_DEVICE = "enocean.add_device"
+SIGNAL_ADDED_TO_GATEWAY = "enocean.added_to_gateway"
+SIGNAL_RECEIVE_ERP1_TELEGRAM = "enocean.receive_erp1_telegram"
+SIGNAL_RECEIVE_EEP_MESSAGE = "enocean.receive_eep_message"
+SIGNAL_RECEIVE_OBSERVATION = "enocean.receive_observation"
+SIGNAL_REMOVE_DEVICE = "enocean.remove_device"
+SIGNAL_SEND_ESP3_PACKET = "enocean.send_esp3_packet"
+SIGNAL_SEND_COMMAND = "enocean.send_command"
 
+CONF_CHANNEL = "channel"
 CONF_SENDER_ID = "sender_id"
 
 LOGGER = logging.getLogger(__package__)
