@@ -34,7 +34,8 @@ from homeassistant.helpers.selector import (
 from homeassistant.helpers.service_info.usb import UsbServiceInfo
 
 from .const import (
-    CONF_CHANNEL,
+    CONF_BASE_ID,
+    CONF_CHANNEL_COUNT,
     CONF_SENDER_ID,
     DOMAIN,
     ERROR_INVALID_DONGLE_PATH,
@@ -189,6 +190,9 @@ class EnOceanFlowHandler(ConfigFlow, domain=DOMAIN):
             # Starting the gateway will raise an exception if it can't connect
             gateway = Gateway(port=dongle_path)
             await gateway.start()
+            user_input[CONF_BASE_ID] = _parse_device_address(
+                (await gateway.base_id).to_string()
+            )
         except ConnectionError as exception:
             LOGGER.warning("Dongle path %s is invalid: %s", dongle_path, str(exception))
             return False
@@ -241,13 +245,14 @@ class CoverSubentryFlowHandler(ConfigSubentryFlow):
 
         errors = {}
         if user_input is not None:
-            for field in (CONF_ID, CONF_SENDER_ID):
+            for field in (CONF_ID,):
                 try:
                     user_input[field] = _parse_device_address(user_input[field])
                 except ValueError:
                     errors[field] = "invalid_device_address"
 
             user_input["type"] = Platform.COVER
+            user_input[CONF_SENDER_ID] = self._get_entry().data[CONF_BASE_ID]
 
             if len(errors) == 0:
                 return self.async_create_entry(
@@ -262,7 +267,6 @@ class CoverSubentryFlowHandler(ConfigSubentryFlow):
                 {
                     vol.Required(CONF_ID): str,
                     vol.Required(CONF_NAME): str,
-                    vol.Optional(CONF_SENDER_ID): str,
                 }
             ),
             errors=errors,
@@ -279,13 +283,17 @@ class SwitchSubentryFlowHandler(ConfigSubentryFlow):
 
         errors = {}
         if user_input is not None:
-            for field in [CONF_ID, CONF_SENDER_ID]:
+            for field in (CONF_ID,):
                 try:
                     user_input[field] = _parse_device_address(user_input[field])
                 except ValueError:
                     errors[field] = "invalid_device_address"
 
+            if user_input[CONF_CHANNEL_COUNT] < 1:
+                errors[CONF_CHANNEL_COUNT] = "invalid_channel_counte"
+
             user_input["type"] = Platform.SWITCH
+            user_input[CONF_SENDER_ID] = self._get_entry().data[CONF_BASE_ID]
 
             if len(errors) == 0:
                 return self.async_create_entry(
@@ -300,8 +308,7 @@ class SwitchSubentryFlowHandler(ConfigSubentryFlow):
                 {
                     vol.Required(CONF_NAME): str,
                     vol.Required(CONF_ID): str,
-                    vol.Optional(CONF_SENDER_ID): str,
-                    vol.Optional(CONF_CHANNEL, default=0): cv.positive_int,
+                    vol.Optional(CONF_CHANNEL_COUNT, default=1): cv.positive_int,
                 }
             ),
             errors=errors,

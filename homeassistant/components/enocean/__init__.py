@@ -3,7 +3,7 @@
 from enocean_async import Gateway
 import voluptuous as vol
 
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_DEVICE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -13,7 +13,6 @@ from homeassistant.helpers.dispatcher import (
     async_dispatcher_send,
     dispatcher_send,
 )
-from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     DOMAIN,
@@ -35,26 +34,6 @@ type EnOceanConfigEntry = ConfigEntry[Gateway]
 CONFIG_SCHEMA = vol.Schema(
     {DOMAIN: vol.Schema({vol.Required(CONF_DEVICE): cv.string})}, extra=vol.ALLOW_EXTRA
 )
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the EnOcean component."""
-    # support for text-based configuration (legacy)
-    if DOMAIN not in config:
-        return True
-
-    if hass.config_entries.async_entries(DOMAIN):
-        # We can only have one gateway. If there is already one in the config,
-        # there is no need to import the yaml based config.
-        return True
-
-    hass.async_create_task(
-        hass.config_entries.flow.async_init(
-            DOMAIN, context={"source": SOURCE_IMPORT}, data=config[DOMAIN]
-        )
-    )
-
-    return True
 
 
 async def async_setup_entry(
@@ -107,7 +86,19 @@ async def async_setup_entry(
     )
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+
+    config_entry.async_on_unload(
+        config_entry.add_update_listener(_async_update_listener)
+    )
+
     return True
+
+
+async def _async_update_listener(
+    hass: HomeAssistant, config_entry: ConfigEntry
+) -> None:
+    """Reload config entry on update (e.g. subentry added/removed)."""
+    await hass.config_entries.async_reload(config_entry.entry_id)
 
 
 async def async_unload_entry(
@@ -115,5 +106,8 @@ async def async_unload_entry(
 ) -> bool:
     """Unload EnOcean config entry: stop the gateway."""
 
+    unload_ok = await hass.config_entries.async_unload_platforms(
+        config_entry, PLATFORMS
+    )
     config_entry.runtime_data.stop()
-    return True
+    return unload_ok

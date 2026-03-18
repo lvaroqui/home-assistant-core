@@ -22,14 +22,17 @@ from homeassistant.components.cover import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ID, CONF_NAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_call_later
 
-from .const import CONF_SENDER_ID
+from .const import CONF_SENDER_ID, DOMAIN, MANUFACTURER
 from .entity import EnOceanEntity, combine_hex
 
 DEFAULT_NAME = "EnOcean Cover"
+WATCHDOG_TIMEOUT = 4  # seconds
 
 PLATFORM_SCHEMA = COVER_PLATFORM_SCHEMA.extend(
     {
@@ -50,16 +53,16 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up the EnOcean switch platform."""
-    entities = []
+    """Set up the EnOcean cover platform."""
     for subentry in config_entry.subentries.values():
         if subentry.data["type"] == "cover":
             device_id: list[int] = subentry.data[CONF_ID]
             dev_name: str = subentry.data[CONF_NAME]
             sender_id: list[int] = subentry.data[CONF_SENDER_ID]
-            entities.append(EnOceanCover(device_id, dev_name, sender_id))
-
-    async_add_entities(entities)
+            async_add_entities(
+                [EnOceanCover(device_id, dev_name, sender_id)],
+                config_subentry_id=subentry.subentry_id,
+            )
 
 
 class EnOceanCover(EnOceanEntity, CoverEntity):
@@ -78,9 +81,16 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
 
         self._attr_unique_id = generate_unique_id(device_id)
         self._attr_name = dev_name
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, str(combine_hex(device_id)))},
+            name=dev_name,
+            manufacturer=MANUFACTURER,
+        )
+
         self._attr_is_closed = None
         self.requested_position: int | None = None
         self._attr_current_cover_position = None
+        self._watchdog_cancel: CALLBACK_TYPE | None = None
 
         self._attr_supported_features = (
             CoverEntityFeature.OPEN
@@ -115,6 +125,33 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
             self.schedule_update_ha_state()
 
         self.send_command(SetCoverPosition(position=percentage))
+        self.hass.loop.call_soon_threadsafe(self._restart_watchdog)
+
+    @callback
+    def _restart_watchdog(self) -> None:
+        """Start or restart the watchdog timer."""
+        if self._watchdog_cancel is not None:
+            self._watchdog_cancel()
+        self._watchdog_cancel = async_call_later(
+            self.hass, WATCHDOG_TIMEOUT, self._watchdog_expired
+        )
+
+    @callback
+    def _cancel_watchdog(self) -> None:
+        """Cancel the watchdog timer."""
+        if self._watchdog_cancel is not None:
+            self._watchdog_cancel()
+            self._watchdog_cancel = None
+
+    @callback
+    def _watchdog_expired(self, _now: Any) -> None:
+        """Handle watchdog timeout: mark cover as stopped if still moving."""
+        self._watchdog_cancel = None
+        if self._attr_is_opening or self._attr_is_closing:
+            self._attr_is_opening = False
+            self._attr_is_closing = False
+            self.requested_position = None
+            self.schedule_update_ha_state()
 
     def open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
@@ -128,6 +165,8 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
         """Stop the cover."""
         self._attr_is_closing = False
         self._attr_is_opening = False
+        self.requested_position = None
+        self.hass.loop.call_soon_threadsafe(self._cancel_watchdog)
         self.schedule_update_ha_state()
         self.send_command(StopCover())
 
@@ -141,14 +180,18 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
         """Update the internal state of the cover based on an observation."""
         schedule_update = False
 
+        if observation.source == ObservationSource.TIMER:
+            # Timeout from watchdog is too short to reliably update position, so we ignore timer observations
+            return
+
+        self.hass.loop.call_soon_threadsafe(self._restart_watchdog)
+
         if Observable.POSITION in observation.values:
             percent = observation.values[Observable.POSITION]
             self._attr_current_cover_position = 100 - percent
             schedule_update = True
 
-        if Observable.COVER_STATE in observation.values and (
-            not self.requested_position or observation.source == ObservationSource.TIMER
-        ):
+        if not self.requested_position and Observable.COVER_STATE in observation.values:
             # If we don't have a requested position, use cover state from the
             # message
             #
@@ -189,6 +232,7 @@ class EnOceanCover(EnOceanEntity, CoverEntity):
                 self.requested_position = None
                 self._attr_is_closing = False
                 self._attr_is_opening = False
+                self.hass.loop.call_soon_threadsafe(self._cancel_watchdog)
 
             schedule_update = True
 

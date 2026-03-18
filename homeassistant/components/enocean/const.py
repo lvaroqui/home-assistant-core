@@ -19,8 +19,9 @@ SIGNAL_REMOVE_DEVICE = "enocean.remove_device"
 SIGNAL_SEND_ESP3_PACKET = "enocean.send_esp3_packet"
 SIGNAL_SEND_COMMAND = "enocean.send_command"
 
-CONF_CHANNEL = "channel"
+CONF_CHANNEL_COUNT = "channel_count"
 CONF_SENDER_ID = "sender_id"
+CONF_BASE_ID = "base_id"
 
 LOGGER = logging.getLogger(__package__)
 
