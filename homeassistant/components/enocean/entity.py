@@ -20,6 +20,7 @@ from .const import (
     LOGGER,
     SIGNAL_ADD_DEVICE,
     SIGNAL_ADDED_TO_GATEWAY,
+    SIGNAL_RECEIVE_EEP_MESSAGE,
     SIGNAL_RECEIVE_ERP1_TELEGRAM,
     SIGNAL_RECEIVE_OBSERVATION,
     SIGNAL_REMOVE_DEVICE,
@@ -95,6 +96,14 @@ class EnOceanEntity(Entity):
             self.async_on_remove(
                 lambda: dispatcher_send(self.hass, SIGNAL_REMOVE_DEVICE, self.address)
             )
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_RECEIVE_EEP_MESSAGE,
+                self._eep_message_received_callback,
+            )
+        )
 
         self.async_on_remove(
             async_dispatcher_connect(

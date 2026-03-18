@@ -11,6 +11,7 @@ from enocean_async import (
     QueryActuatorStatus,
     SetSwitchOutput,
 )
+from enocean_async.eep.message import EEPMessage
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -68,6 +69,7 @@ async def async_setup_entry(
                         channel=0x1E,  # special channel for all switches
                         sender_id=sender_id,
                         device_name=subentry.data[CONF_NAME],
+                        channel_count=channel_count,
                     )
                 )
 
@@ -86,10 +88,15 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
         channel: int,
         sender_id: list[int],
         device_name: str,
+        channel_count: int = 1,
     ) -> None:
         """Initialize the EnOcean switch device."""
         super().__init__(dev_id, EEP(0xD2, 0x01, 0x01), sender_id)
         self.channel: int = channel
+        self.channel_count: int = channel_count
+
+        if self.channel == 0x1E:
+            self.channel_states = [False] * channel_count
 
         self._attr_unique_id = generate_unique_id(dev_id, channel)
         self._attr_name = entity_name
@@ -102,7 +109,8 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
 
     def added_to_gateway(self):
         """Handle being added to the gateway."""
-        self.send_command(QueryActuatorStatus(entity_id=str(self.channel)))
+        if self.channel != 0x1E:  # Don't query status for the "all switches" channel
+            self.send_command(QueryActuatorStatus(entity_id=str(self.channel)))
 
     def _set_state(self, on: bool):
         """Send a telegram to turn the switch on or off."""
@@ -126,21 +134,15 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
                 self._attr_is_on = observation.values[Observable.SWITCH_STATE]
                 self.schedule_update_ha_state()
 
-    # def erp1_telegram_received(self, telegram: ERP1Telegram) -> None:
-    #     """Update the internal state of the switch."""
-    #     if telegram.rorg == 0xA5:
-    #         # power meter telegram, turn on if > 1 watts
-    #         if (eep := EEP_SPECIFICATIONS.get(EEP(0xA5, 0x12, 0x01))) is None:
-    #             LOGGER.warning("EEP A5-12-01 cannot be decoded")
-    #             return
-
-    #         msg: EEPMessage = EEPHandler(eep).decode(telegram)
-
-    #         if "DT" in msg.values and msg.values["DT"].raw == 1:
-    #             # this packet reports the current value
-    #             raw_val = msg.values["MR"].raw
-    #             divisor = msg.values["DIV"].raw
-    #             watts = raw_val / (10**divisor)
-    #             if watts > 1:
-    #                 self._attr_is_on = True
-    #                 self.schedule_update_ha_state()
+    def eep_message_received(self, message: EEPMessage):
+        """Update the internal state of the switch based on an EEP message."""
+        # Only process messages for the special "all switches" channel
+        if (
+            self.channel == 0x1E
+            and "I/O" in message.raw
+            and Observable.SWITCH_STATE in message.values
+        ):
+            channel = int(message.raw["I/O"])
+            self.channel_states[channel] = message.values[Observable.SWITCH_STATE].value
+            self._attr_is_on = any(self.channel_states)
+            self.schedule_update_ha_state()
