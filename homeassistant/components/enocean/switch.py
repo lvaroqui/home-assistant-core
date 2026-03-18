@@ -16,9 +16,10 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ID, CONF_NAME, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CONF_CHANNEL, CONF_SENDER_ID
+from .const import CONF_CHANNEL_COUNT, CONF_SENDER_ID, DOMAIN, MANUFACTURER
 from .entity import EnOceanEntity, combine_hex
 
 DEFAULT_NAME = "EnOcean Switch"
@@ -36,16 +37,30 @@ async def async_setup_entry(
 ) -> None:
     """Set up the EnOcean switch entities."""
 
-    entities = []
     for subentry in config_entry.subentries.values():
         if subentry.data["type"] == Platform.SWITCH:
             device_id: list[int] = subentry.data[CONF_ID]
-            dev_name: str = subentry.data[CONF_NAME]
             sender_id: list[int] = subentry.data[CONF_SENDER_ID]
-            channel = subentry.data[CONF_CHANNEL]
-            entities.append(EnOceanSwitch(device_id, dev_name, channel, sender_id))
+            channel_count = subentry.data[CONF_CHANNEL_COUNT]
 
-    async_add_entities(entities)
+            entities = []
+            for channel in range(channel_count):
+                if channel_count == 1:
+                    entity_name: str = subentry.data[CONF_NAME]
+                else:
+                    entity_name = f"{subentry.data[CONF_NAME]} Switch {channel}"
+
+                entities.append(
+                    EnOceanSwitch(
+                        device_id,
+                        entity_name,
+                        channel,
+                        sender_id,
+                        subentry.data[CONF_NAME],
+                    )
+                )
+
+            async_add_entities(entities, config_subentry_id=subentry.subentry_id)
 
 
 class EnOceanSwitch(EnOceanEntity, SwitchEntity):
@@ -54,14 +69,25 @@ class EnOceanSwitch(EnOceanEntity, SwitchEntity):
     _attr_is_on = False
 
     def __init__(
-        self, dev_id: list[int], dev_name: str, channel: int, sender_id: list[int]
+        self,
+        dev_id: list[int],
+        entity_name: str,
+        channel: int,
+        sender_id: list[int],
+        device_name: str,
     ) -> None:
         """Initialize the EnOcean switch device."""
         super().__init__(dev_id, EEP(0xD2, 0x01, 0x01), sender_id)
         self.channel: int = channel
 
         self._attr_unique_id = generate_unique_id(dev_id, channel)
-        self._attr_name = dev_name
+        self._attr_name = entity_name
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, str(combine_hex(dev_id)))},
+            name=device_name,
+            manufacturer=MANUFACTURER,
+        )
 
     def added_to_gateway(self):
         """Handle being added to the gateway."""
