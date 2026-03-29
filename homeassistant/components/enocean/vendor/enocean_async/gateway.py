@@ -974,7 +974,10 @@ class Gateway:
             func = erp1.bitstring_raw_value(0, 6)
             type_ = erp1.bitstring_raw_value(6, 7)
             manufacturer_id = erp1.bitstring_raw_value(13, 11)
-            manufacturer = Manufacturer(manufacturer_id)
+            try:
+                manufacturer = Manufacturer(manufacturer_id)
+            except ValueError:
+                manufacturer = Manufacturer.UNKNOWN
             eep = EEP(0xA5, func, type_, manufacturer)
             self._logger.info(
                 f"4BS learn telegram with EEP A5-{func:02X}-{type_:02X} and manufacturer '{manufacturer}', hence {eep}"

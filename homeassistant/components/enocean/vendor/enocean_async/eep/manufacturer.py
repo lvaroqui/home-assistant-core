@@ -122,6 +122,7 @@ class Manufacturer(IntEnum):
     TOMMASO_TECHNOLOGIES = (0x073, "Tommaso Technologies")
     REHAU = (0x074, "Rehau")
     MULTI_USER_MANUFACTURER = (0x7FF, "Multi-User Manufacturer")
+    UNKNOWN = (0xFFFF, "Unknown")
 
     def __new__(cls, value, friendly_name):
         obj = int.__new__(cls, value)
