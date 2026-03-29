@@ -765,7 +765,7 @@ class Gateway:
             self.__known_senders.append(erp1.sender)
             if isinstance(erp1.sender, EURID):
                 self.__emit(self.__new_device_callbacks, erp1.sender)
-                self._logger.info(
+                self._logger.debug(
                     f"New device detected with sender address: {erp1.sender}"
                 )
             else:
@@ -979,6 +979,6 @@ class Gateway:
             except ValueError:
                 manufacturer = Manufacturer.UNKNOWN
             eep = EEP(0xA5, func, type_, manufacturer)
-            self._logger.info(
+            self._logger.debug(
                 f"4BS learn telegram with EEP A5-{func:02X}-{type_:02X} and manufacturer '{manufacturer}', hence {eep}"
             )
