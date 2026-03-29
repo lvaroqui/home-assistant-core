@@ -1,6 +1,7 @@
 """Asynchronous EnOcean Serial Protocol Version 3 (ESP3) implementation."""
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
@@ -30,6 +31,8 @@ class EnOceanSerialProtocol3(asyncio.Protocol):
     def data_received(self, data: bytes):
         """Process the internal buffer to extract complete ESP3 packets and emit them."""
         self.__buffer.extend(data)
+
+        logger = logging.getLogger(__name__)
 
         while True:
             # find sync byte
@@ -75,12 +78,17 @@ class EnOceanSerialProtocol3(asyncio.Protocol):
                 del self.__buffer[:1]
                 continue
 
-            # create ESP3Packet and process it
-            pkt = ESP3Packet(ESP3PacketType(packet_type), data, optional)
-            self.__gateway.process_esp3_packet(pkt)
-
-            # Remove processed bytes
-            del self.__buffer[:total_len]
+            try:
+                # create ESP3Packet and process it
+                pkt = ESP3Packet(ESP3PacketType(packet_type), data, optional)
+                self.__gateway.process_esp3_packet(pkt)
+            except Exception as e:
+                # Invalid packet, skip it
+                logger.error("Invalid ESP3 packet: %s", e)
+                continue
+            finally:
+                # Remove processed bytes from buffer
+                del self.__buffer[:total_len]
 
     def connection_lost(self, exception: Exception | None):
         self.__gateway.connection_lost(exception)
