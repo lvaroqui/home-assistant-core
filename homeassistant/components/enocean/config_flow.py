@@ -3,7 +3,7 @@
 import glob
 from typing import Any
 
-from enocean_async import Gateway
+from .vendor.enocean_async import Gateway
 import voluptuous as vol
 
 from homeassistant.components import usb

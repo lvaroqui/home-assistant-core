@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enocean_async import ERP1Telegram
+from .vendor.enocean_async import ERP1Telegram
 import voluptuous as vol
 
 from homeassistant.components.binary_sensor import (

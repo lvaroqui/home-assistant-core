@@ -1,6 +1,6 @@
 """Representation of an EnOcean device."""
 
-from enocean_async import (
+from .vendor.enocean_async import (
     EEP,
     EURID,
     BaseAddress,
@@ -8,10 +8,10 @@ from enocean_async import (
     Observation,
     SenderAddress,
 )
-from enocean_async.address import Address
-from enocean_async.eep.message import EEPMessage
-from enocean_async.protocol.erp1.telegram import ERP1Telegram
-from enocean_async.protocol.esp3.packet import ESP3Packet, ESP3PacketType
+from .vendor.enocean_async.address import Address
+from .vendor.enocean_async.eep.message import EEPMessage
+from .vendor.enocean_async.protocol.erp1.telegram import ERP1Telegram
+from .vendor.enocean_async.protocol.esp3.packet import ESP3Packet, ESP3PacketType
 
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, dispatcher_send
 from homeassistant.helpers.entity import Entity

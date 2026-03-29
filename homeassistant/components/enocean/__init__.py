@@ -1,6 +1,6 @@
 """Support for EnOcean devices."""
 
-from enocean_async import Gateway
+from .vendor.enocean_async import Gateway
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry

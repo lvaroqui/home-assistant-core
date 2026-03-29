@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from enocean_async import (
+from .vendor.enocean_async import (
     EEP,
     Observable,
     Observation,
