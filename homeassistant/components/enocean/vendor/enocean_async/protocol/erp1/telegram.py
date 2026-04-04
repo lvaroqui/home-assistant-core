@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import IntEnum
 
-from enocean_async.eep.manufacturer import Manufacturer
+from ...eep.manufacturer import Manufacturer
 
 from ...address import EURID, Address, BaseAddress, BroadcastAddress
 from ...eep.id import EEP

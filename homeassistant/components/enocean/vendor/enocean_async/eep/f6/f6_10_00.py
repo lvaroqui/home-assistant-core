@@ -1,4 +1,4 @@
-from enocean_async.eep.manufacturer import Manufacturer
+from ..manufacturer import Manufacturer
 
 from ...semantics.observable import Observable
 from ...semantics.observers.scalar import scalar_factory
